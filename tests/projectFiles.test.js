@@ -11,10 +11,13 @@ describe("project launch files", () => {
 
     expect(windowsLauncher).toContain("npm install");
     expect(windowsLauncher).toContain("npm run build");
-    expect(windowsLauncher).toContain("npm start");
+    expect(windowsLauncher).toContain("Start-Process");
+    expect(windowsLauncher).toContain("npm.cmd");
+    expect(windowsLauncher).toContain("WindowStyle Hidden");
     expect(macLauncher).toContain("npm install");
     expect(macLauncher).toContain("npm run build");
     expect(macLauncher).toContain("npm start");
+    expect(macLauncher).toContain("nohup");
   });
 
   test("documents agent install prompt and right-click exit", () => {

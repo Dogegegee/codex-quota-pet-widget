@@ -1,20 +1,15 @@
 const MAX_UNCHANGED_POLLS = 5;
 
-export function shouldPauseQuotaPolling(snapshot) {
-  const remaining = snapshot?.fiveHour?.remainingPercent;
-  return remaining === 0 || remaining === 99;
-}
-
-export function nextQuotaPollingState(previousState, snapshot) {
+export function nextQuotaPollingState(previousState, snapshot, options = {}) {
   const signature = quotaSignature(snapshot);
-  const unchangedCount = signature && signature === previousState?.signature
+  const unchangedCount = !options.resetUnchanged && signature && signature === previousState?.signature
     ? (previousState.unchangedCount ?? 0) + 1
     : 1;
 
   return {
     signature,
     unchangedCount,
-    paused: shouldPauseQuotaPolling(snapshot) || unchangedCount >= MAX_UNCHANGED_POLLS,
+    paused: unchangedCount >= MAX_UNCHANGED_POLLS,
   };
 }
 

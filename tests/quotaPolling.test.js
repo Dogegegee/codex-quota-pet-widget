@@ -1,17 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { nextQuotaPollingState, shouldPauseQuotaPolling } from "../src/main/quotaPolling.js";
+import { nextQuotaPollingState } from "../src/main/quotaPolling.js";
 
 describe("quota polling policy", () => {
-  test("pauses polling when the five hour quota is exhausted or visually full", () => {
-    expect(shouldPauseQuotaPolling({ fiveHour: { remainingPercent: 0 } })).toBe(true);
-    expect(shouldPauseQuotaPolling({ fiveHour: { remainingPercent: 99 } })).toBe(true);
-    expect(shouldPauseQuotaPolling({ fiveHour: { remainingPercent: 54 } })).toBe(false);
-  });
-
-  test("keeps polling while the five hour quota is unknown", () => {
-    expect(shouldPauseQuotaPolling({ fiveHour: { remainingPercent: null } })).toBe(false);
-  });
-
   test("pauses polling after five unchanged quota snapshots", () => {
     let state = { paused: false, unchangedCount: 0, signature: null };
     const snapshot = {
@@ -38,5 +28,31 @@ describe("quota polling policy", () => {
     expect(first.paused).toBe(false);
     expect(first.unchangedCount).toBe(1);
     expect(first.signature).toBe("53/32");
+  });
+
+  test("does not special case exhausted or visually full quota values", () => {
+    const exhausted = nextQuotaPollingState(
+      { paused: false, unchangedCount: 0, signature: null },
+      { fiveHour: { remainingPercent: 0 }, weekly: { remainingPercent: 32 } },
+    );
+    const full = nextQuotaPollingState(
+      { paused: false, unchangedCount: 0, signature: null },
+      { fiveHour: { remainingPercent: 99 }, weekly: { remainingPercent: 32 } },
+    );
+
+    expect(exhausted.paused).toBe(false);
+    expect(full.paused).toBe(false);
+  });
+
+  test("session-triggered refresh wakes polling even when the quota value is unchanged", () => {
+    const state = nextQuotaPollingState(
+      { paused: true, unchangedCount: 5, signature: "54/32" },
+      { fiveHour: { remainingPercent: 54 }, weekly: { remainingPercent: 32 } },
+      { resetUnchanged: true },
+    );
+
+    expect(state.paused).toBe(false);
+    expect(state.unchangedCount).toBe(1);
+    expect(state.signature).toBe("54/32");
   });
 });

@@ -15,4 +15,4 @@ if not exist "dist\index.html" (
   if errorlevel 1 exit /b 1
 )
 
-start "" /min cmd /c "npm start"
+start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'npm.cmd' -ArgumentList 'start' -WorkingDirectory '%~dp0' -WindowStyle Hidden"

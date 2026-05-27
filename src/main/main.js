@@ -151,7 +151,9 @@ async function refreshQuota({ trigger = "timer" } = {}) {
   quotaRefreshInFlight = true;
   try {
     latestState = await readFreshQuotaSnapshot();
-    quotaPollingState = nextQuotaPollingState(quotaPollingState, latestState);
+    quotaPollingState = nextQuotaPollingState(quotaPollingState, latestState, {
+      resetUnchanged: trigger === "session",
+    });
     logQuotaChange(latestState);
     broadcastState(latestState);
     return latestState;
