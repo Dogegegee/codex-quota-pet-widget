@@ -10,7 +10,7 @@ import {
   readCodexGlobalState,
 } from "./codexState.js";
 import { nextQuotaPollingState } from "./quotaPolling.js";
-import { readFreshQuotaSnapshot, readLatestQuotaSnapshot } from "./quotaReader.js";
+import { createUnknownSnapshot, readFreshQuotaSnapshot } from "./quotaReader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -141,7 +141,7 @@ function startSessionWatch() {
 }
 
 function getQuotaState() {
-  if (!latestState) latestState = readLatestQuotaSnapshot();
+  if (!latestState) latestState = createUnknownSnapshot();
   return latestState;
 }
 

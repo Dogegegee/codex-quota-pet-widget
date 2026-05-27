@@ -102,6 +102,40 @@ describe("quota reader", () => {
     expect(snapshot.source).toContain("logs_2.sqlite-wal");
   });
 
+  test("times out a stalled live usage request instead of waiting indefinitely", async () => {
+    const codexHome = makeCodexHome();
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "test-token" },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(codexHome, "logs_2.sqlite-wal"),
+      'websocket event: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":82,"window_minutes":300,"reset_at":1779795365},"secondary":{"used_percent":28,"window_minutes":10080,"reset_at":1780215936}}}',
+      "utf8",
+    );
+
+    const startedAt = Date.now();
+    let sawAbortSignal = false;
+    const snapshot = await readFreshQuotaSnapshot({
+      codexHome,
+      now: new Date("2026-05-26T02:30:00.000Z"),
+      usageTimeoutMs: 10,
+      fetchImpl: (_url, options) => new Promise((_resolve, reject) => {
+        sawAbortSignal = options?.signal instanceof AbortSignal;
+        options.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(sawAbortSignal).toBe(true);
+    expect(snapshot.fiveHour.remainingPercent).toBe(18);
+    expect(snapshot.source).toContain("logs_2.sqlite-wal");
+  });
+
   test("keeps the last live usage snapshot instead of regressing to stale local logs", async () => {
     const codexHome = makeCodexHome();
     fs.writeFileSync(

@@ -21,8 +21,9 @@ export async function readFreshQuotaSnapshot({
   codexHome = getCodexHome(),
   now = new Date(),
   fetchImpl = globalThis.fetch,
+  usageTimeoutMs = 8_000,
 } = {}) {
-  const usageEvent = await fetchLatestUsageEvent(codexHome, fetchImpl);
+  const usageEvent = await fetchLatestUsageEvent(codexHome, fetchImpl, usageTimeoutMs);
   if (usageEvent) return snapshotFromEvent(usageEvent, now);
   const lastUsageEvent = lastUsageEventByHome.get(codexHome);
   if (lastUsageEvent) return snapshotFromEvent(lastUsageEvent, now);
@@ -42,7 +43,7 @@ export function readLatestQuotaSnapshot({ codexHome = getCodexHome(), now = new 
   return createUnknownSnapshot(now);
 }
 
-async function fetchLatestUsageEvent(codexHome, fetchImpl) {
+async function fetchLatestUsageEvent(codexHome, fetchImpl, usageTimeoutMs) {
   if (typeof fetchImpl !== "function") return null;
 
   const auth = readChatgptAuth(codexHome);
@@ -56,7 +57,14 @@ async function fetchLatestUsageEvent(codexHome, fetchImpl) {
     };
     if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId;
 
-    const response = await fetchImpl(usageUrl, { headers });
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), Math.max(1, usageTimeoutMs));
+    let response;
+    try {
+      response = await fetchImpl(usageUrl, { headers, signal: abortController.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response?.ok) return null;
     const payload = await response.json();
     const rateLimits = rateLimitsFromUsagePayload(payload);
@@ -363,7 +371,7 @@ function findMatchingJsonBrace(raw, startIndex) {
   return -1;
 }
 
-function createUnknownSnapshot(now) {
+export function createUnknownSnapshot(now = new Date()) {
   const emptyLimit = {
     remainingPercent: null,
     usedPercent: null,
