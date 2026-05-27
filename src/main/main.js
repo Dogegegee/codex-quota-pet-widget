@@ -9,7 +9,7 @@ import {
   getCodexGlobalStatePath,
   readCodexGlobalState,
 } from "./codexState.js";
-import { shouldPauseQuotaPolling } from "./quotaPolling.js";
+import { nextQuotaPollingState } from "./quotaPolling.js";
 import { readFreshQuotaSnapshot, readLatestQuotaSnapshot } from "./quotaReader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +25,7 @@ let sessionDebounce = null;
 let latestState = null;
 let lastLoggedQuotaSignature = null;
 let quotaRefreshInFlight = false;
-let quotaPollingPaused = false;
+let quotaPollingState = { paused: false, unchangedCount: 0, signature: null };
 const logPath = path.join(os.homedir(), ".codex", "quota-pet-widget", "widget.log");
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -146,12 +146,12 @@ function getQuotaState() {
 }
 
 async function refreshQuota({ trigger = "timer" } = {}) {
-  if (quotaPollingPaused && trigger !== "session") return latestState;
+  if (quotaPollingState.paused && trigger !== "session") return latestState;
   if (quotaRefreshInFlight) return latestState;
   quotaRefreshInFlight = true;
   try {
     latestState = await readFreshQuotaSnapshot();
-    quotaPollingPaused = shouldPauseQuotaPolling(latestState);
+    quotaPollingState = nextQuotaPollingState(quotaPollingState, latestState);
     logQuotaChange(latestState);
     broadcastState(latestState);
     return latestState;
