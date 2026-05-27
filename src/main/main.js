@@ -9,7 +9,7 @@ import {
   getCodexGlobalStatePath,
   readCodexGlobalState,
 } from "./codexState.js";
-import { readLatestQuotaSnapshot } from "./quotaReader.js";
+import { readFreshQuotaSnapshot, readLatestQuotaSnapshot } from "./quotaReader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -23,6 +23,7 @@ let sessionWatcher = null;
 let sessionDebounce = null;
 let latestState = null;
 let lastLoggedQuotaSignature = null;
+let quotaRefreshInFlight = false;
 const logPath = path.join(os.homedir(), ".codex", "quota-pet-widget", "widget.log");
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -142,11 +143,17 @@ function getQuotaState() {
   return latestState;
 }
 
-function refreshQuota() {
-  latestState = readLatestQuotaSnapshot();
-  logQuotaChange(latestState);
-  broadcastState(latestState);
-  return latestState;
+async function refreshQuota() {
+  if (quotaRefreshInFlight) return latestState;
+  quotaRefreshInFlight = true;
+  try {
+    latestState = await readFreshQuotaSnapshot();
+    logQuotaChange(latestState);
+    broadcastState(latestState);
+    return latestState;
+  } finally {
+    quotaRefreshInFlight = false;
+  }
 }
 
 function broadcastState(state) {
@@ -213,7 +220,7 @@ function log(message) {
 }
 
 function logQuotaChange(state) {
-  const signature = `${state.fiveHour.remainingPercent}/${state.weekly.remainingPercent}/${state.syncedAt}`;
+  const signature = `${state.fiveHour.remainingPercent}/${state.weekly.remainingPercent}/${state.source}`;
   if (signature === lastLoggedQuotaSignature) return;
   lastLoggedQuotaSignature = signature;
   log(

@@ -8,11 +8,25 @@ const SESSION_TAIL_BYTES = 256 * 1024;
 const REALTIME_LOG_SCAN_BYTES = 96 * 1024 * 1024;
 const MAX_FILES = 32;
 const SQLITE_RECENT_ID_WINDOW = 100_000;
+const DEFAULT_CHATGPT_BACKEND_BASE_URL = "https://chatgpt.com/backend-api";
 const realtimeLogCache = new Map();
 let sqliteCliAvailable = true;
+const lastUsageEventByHome = new Map();
 
 export function getCodexHome() {
   return path.join(os.homedir(), ".codex");
+}
+
+export async function readFreshQuotaSnapshot({
+  codexHome = getCodexHome(),
+  now = new Date(),
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const usageEvent = await fetchLatestUsageEvent(codexHome, fetchImpl);
+  if (usageEvent) return snapshotFromEvent(usageEvent, now);
+  const lastUsageEvent = lastUsageEventByHome.get(codexHome);
+  if (lastUsageEvent) return snapshotFromEvent(lastUsageEvent, now);
+  return readLatestQuotaSnapshot({ codexHome, now });
 }
 
 export function readLatestQuotaSnapshot({ codexHome = getCodexHome(), now = new Date() } = {}) {
@@ -26,6 +40,98 @@ export function readLatestQuotaSnapshot({ codexHome = getCodexHome(), now = new 
   if (archivedEvent) return snapshotFromEvent(archivedEvent, now);
 
   return createUnknownSnapshot(now);
+}
+
+async function fetchLatestUsageEvent(codexHome, fetchImpl) {
+  if (typeof fetchImpl !== "function") return null;
+
+  const auth = readChatgptAuth(codexHome);
+  if (!auth?.accessToken) return null;
+
+  const usageUrl = usageUrlFromBase(readChatgptBaseUrl(codexHome));
+  try {
+    const headers = {
+      authorization: `Bearer ${auth.accessToken}`,
+      "user-agent": "codex-quota-pet-widget",
+    };
+    if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId;
+
+    const response = await fetchImpl(usageUrl, { headers });
+    if (!response?.ok) return null;
+    const payload = await response.json();
+    const rateLimits = rateLimitsFromUsagePayload(payload);
+    if (!rateLimits?.primary && !rateLimits?.secondary) return null;
+    const event = {
+      rateLimits,
+      timestamp: new Date().toISOString(),
+      timestampMs: Date.now(),
+      source: usageUrl,
+    };
+    lastUsageEventByHome.set(codexHome, event);
+    return event;
+  } catch {
+    return null;
+  }
+}
+
+function readChatgptAuth(codexHome) {
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"));
+    if (auth?.auth_mode === "apikey" || auth?.OPENAI_API_KEY) return null;
+    return {
+      accessToken: auth?.tokens?.access_token ?? null,
+      accountId: auth?.tokens?.account_id ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readChatgptBaseUrl(codexHome) {
+  try {
+    const config = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+    const match = config.match(/^\s*chatgpt_base_url\s*=\s*["']([^"']+)["']/m);
+    if (match?.[1]) return match[1];
+  } catch {
+    // Default to the same ChatGPT backend URL Codex uses.
+  }
+  return DEFAULT_CHATGPT_BACKEND_BASE_URL;
+}
+
+function usageUrlFromBase(baseUrl) {
+  let normalized = String(baseUrl || DEFAULT_CHATGPT_BACKEND_BASE_URL).trim();
+  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+  if (
+    (normalized.startsWith("https://chatgpt.com") || normalized.startsWith("https://chat.openai.com"))
+    && !normalized.includes("/backend-api")
+  ) {
+    normalized = `${normalized}/backend-api`;
+  }
+  return normalized.includes("/backend-api")
+    ? `${normalized}/wham/usage`
+    : `${normalized}/api/codex/usage`;
+}
+
+function rateLimitsFromUsagePayload(payload) {
+  const rateLimit = payload?.rate_limit;
+  const primary = windowFromUsagePayload(rateLimit?.primary_window);
+  const secondary = windowFromUsagePayload(rateLimit?.secondary_window);
+  const rateLimits = {};
+  if (primary) rateLimits.primary = primary;
+  if (secondary) rateLimits.secondary = secondary;
+  return rateLimits;
+}
+
+function windowFromUsagePayload(window) {
+  if (!window || typeof window !== "object") return null;
+  const windowMinutes = Number.isFinite(window.limit_window_seconds)
+    ? Math.round(window.limit_window_seconds / 60)
+    : null;
+  return {
+    used_percent: window.used_percent,
+    window_minutes: windowMinutes,
+    reset_at: window.reset_at,
+  };
 }
 
 function findLatestRateLimitLogEvent(codexHome) {

@@ -48,7 +48,7 @@ describe("quota normalization", () => {
       new Date("2026-05-26T04:15:00.000Z"),
     );
 
-    expect(snapshot.fiveHour.remainingPercent).toBe(100);
+    expect(snapshot.fiveHour.remainingPercent).toBe(99);
     expect(snapshot.fiveHour.usedPercent).toBe(0);
     expect(snapshot.fiveHour.resetsAt).toBe("2026-05-26T09:00:00.000Z");
     expect(snapshot.fiveHour.windowProgressPercent).toBe(5);
@@ -71,7 +71,7 @@ describe("quota normalization", () => {
   });
 
   test("clamps invalid or out of range used percentages", () => {
-    expect(remainingFromUsed(-20)).toBe(100);
+    expect(remainingFromUsed(-20)).toBe(99);
     expect(remainingFromUsed(42.4)).toBe(58);
     expect(remainingFromUsed(130)).toBe(0);
     expect(remainingFromUsed(null)).toBe(null);

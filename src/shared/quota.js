@@ -17,7 +17,7 @@ export function normalizeRateLimits(rateLimits, now = new Date(), options = {}) 
 
 export function remainingFromUsed(usedPercent) {
   if (!Number.isFinite(usedPercent)) return null;
-  return clamp(Math.round(100 - usedPercent), 0, 100);
+  return clamp(Math.round(100 - usedPercent), 0, 99);
 }
 
 export function toneForRemaining(remainingPercent) {

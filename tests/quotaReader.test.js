@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { readLatestQuotaSnapshot } from "../src/main/quotaReader.js";
+import { readFreshQuotaSnapshot, readLatestQuotaSnapshot } from "../src/main/quotaReader.js";
 
 const tempDirs = [];
 
@@ -20,6 +20,132 @@ function makeCodexHome() {
 }
 
 describe("quota reader", () => {
+  test("prefers the live Codex usage endpoint over stale local logs", async () => {
+    const codexHome = makeCodexHome();
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: "test-token",
+          account_id: "test-account",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(codexHome, "logs_2.sqlite-wal"),
+      'websocket event: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":88,"window_minutes":300,"reset_at":1779795365},"secondary":{"used_percent":40,"window_minutes":10080,"reset_at":1780215936}}}',
+      "utf8",
+    );
+
+    const fetchImpl = async (url, options) => {
+      expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
+      expect(options.headers.authorization).toBe("Bearer test-token");
+      expect(options.headers["ChatGPT-Account-Id"]).toBe("test-account");
+      return {
+        ok: true,
+        async json() {
+          return {
+            rate_limit: {
+              primary_window: {
+                used_percent: 9,
+                limit_window_seconds: 18000,
+                reset_at: 1779880302,
+              },
+              secondary_window: {
+                used_percent: 62,
+                limit_window_seconds: 604800,
+                reset_at: 1780215936,
+              },
+            },
+          };
+        },
+      };
+    };
+
+    const snapshot = await readFreshQuotaSnapshot({
+      codexHome,
+      now: new Date("2026-05-27T06:16:00.000Z"),
+      fetchImpl,
+    });
+
+    expect(snapshot.fiveHour.remainingPercent).toBe(91);
+    expect(snapshot.weekly.remainingPercent).toBe(38);
+    expect(snapshot.source).toBe("https://chatgpt.com/backend-api/wham/usage");
+  });
+
+  test("falls back to local quota logs when live usage cannot be read", async () => {
+    const codexHome = makeCodexHome();
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "test-token" },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(codexHome, "logs_2.sqlite-wal"),
+      'websocket event: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":14,"window_minutes":300,"reset_at":1779795365},"secondary":{"used_percent":29,"window_minutes":10080,"reset_at":1780215936}}}',
+      "utf8",
+    );
+
+    const snapshot = await readFreshQuotaSnapshot({
+      codexHome,
+      now: new Date("2026-05-26T02:30:00.000Z"),
+      fetchImpl: async () => ({ ok: false }),
+    });
+
+    expect(snapshot.fiveHour.remainingPercent).toBe(86);
+    expect(snapshot.weekly.remainingPercent).toBe(71);
+    expect(snapshot.source).toContain("logs_2.sqlite-wal");
+  });
+
+  test("keeps the last live usage snapshot instead of regressing to stale local logs", async () => {
+    const codexHome = makeCodexHome();
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "test-token" },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(codexHome, "logs_2.sqlite-wal"),
+      'websocket event: {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":1,"window_minutes":300,"reset_at":1779795365},"secondary":{"used_percent":1,"window_minutes":10080,"reset_at":1780215936}}}',
+      "utf8",
+    );
+    const liveResponse = {
+      ok: true,
+      async json() {
+        return {
+          rate_limit: {
+            primary_window: { used_percent: 16, limit_window_seconds: 18000, reset_at: 1779880302 },
+            secondary_window: { used_percent: 63, limit_window_seconds: 604800, reset_at: 1780215936 },
+          },
+        };
+      },
+    };
+
+    const first = await readFreshQuotaSnapshot({
+      codexHome,
+      now: new Date("2026-05-27T06:20:00.000Z"),
+      fetchImpl: async () => liveResponse,
+    });
+    const second = await readFreshQuotaSnapshot({
+      codexHome,
+      now: new Date("2026-05-27T06:21:00.000Z"),
+      fetchImpl: async () => ({ ok: false }),
+    });
+
+    expect(first.fiveHour.remainingPercent).toBe(84);
+    expect(second.fiveHour.remainingPercent).toBe(84);
+    expect(second.weekly.remainingPercent).toBe(37);
+    expect(second.source).toBe("https://chatgpt.com/backend-api/wham/usage");
+  });
+
   test("prefers Codex websocket rate limit logs over session jsonl snapshots", () => {
     const codexHome = makeCodexHome();
     fs.writeFileSync(
