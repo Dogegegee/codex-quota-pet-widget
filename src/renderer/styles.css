@@ -1,0 +1,212 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    "Microsoft YaHei UI",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  background: transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+button {
+  font: inherit;
+}
+
+.quota-widget {
+  --status: #ffd68e;
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  padding: 6px 6px 3px;
+  color: #fff4df;
+  background:
+    linear-gradient(150deg, rgba(38, 35, 31, 0.98), rgba(15, 18, 22, 0.97)),
+    rgba(20, 20, 20, 0.96);
+  border: 1px solid rgba(255, 214, 142, 0.72);
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.36),
+    0 0 10px rgba(255, 214, 142, 0.12),
+    0 12px 26px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(14px);
+  cursor: default;
+  pointer-events: none;
+}
+
+.quota-widget.safe {
+  --status: #ffd68e;
+}
+
+.quota-widget.watch {
+  --status: #ffd68e;
+}
+
+.quota-widget.low {
+  --status: #ff786b;
+  animation: low-pulse 1.8s ease-in-out infinite;
+}
+
+.quota-widget.unknown {
+  --status: #ffd68e;
+}
+
+.bars {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.quota-card {
+  --tone: #98a2b3;
+  --period: 0deg;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 15px 1fr 11px;
+  gap: 2px;
+  text-align: center;
+}
+
+.quota-card.safe {
+  --tone: #78de8f;
+}
+
+.quota-card.watch {
+  --tone: #ffd166;
+}
+
+.quota-card.low {
+  --tone: #ff786b;
+}
+
+.quota-card.unknown {
+  --tone: #98a2b3;
+}
+
+.bar-label,
+.quota-card em {
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+  color: #fff0c9;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: clip;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.86);
+}
+
+.quota-card em {
+  color: color-mix(in srgb, var(--tone) 92%, white 8%);
+  align-self: end;
+}
+
+.bar-track {
+  position: relative;
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.28);
+}
+
+.period-svg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.period-rail,
+.period-progress {
+  fill: none;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.period-rail {
+  stroke: rgba(255, 255, 255, 0.045);
+  stroke-linecap: butt;
+}
+
+.period-progress {
+  stroke-linecap: butt;
+}
+
+.quota-card.five .period-rail {
+  stroke: rgba(255, 255, 255, 0.045);
+}
+
+.quota-card.five .period-progress {
+  stroke: #67b7ff;
+  filter: none;
+}
+
+.quota-card.week .period-rail {
+  stroke: rgba(255, 255, 255, 0.045);
+}
+
+.quota-card.week .period-progress {
+  stroke: #d58cff;
+  filter: none;
+}
+
+.bar-track span {
+  position: absolute;
+  z-index: 1;
+  right: 1px;
+  bottom: 1px;
+  left: 1px;
+  height: calc(var(--fill) - 2px);
+  min-height: 5px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 35%),
+    linear-gradient(180deg, color-mix(in srgb, var(--tone) 96%, white 4%), color-mix(in srgb, var(--tone) 74%, black 26%));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--tone) 34%, transparent);
+  transition: height 300ms ease;
+}
+
+@keyframes low-pulse {
+  0%,
+  100% {
+    border-color: rgba(255, 120, 107, 0.5);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.36),
+      0 0 7px rgba(255, 120, 107, 0.2),
+      0 12px 26px rgba(0, 0, 0, 0.38);
+  }
+  50% {
+    border-color: rgba(255, 120, 107, 0.96);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.36),
+      0 0 15px rgba(255, 120, 107, 0.55),
+      0 12px 26px rgba(0, 0, 0, 0.38);
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "codex-quota-pet-widget",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:electron": "set CODEX_QUOTA_DEV_SERVER_URL=http://127.0.0.1:5173&& electron .",
+    "build": "vite build",
+    "start": "electron .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "^39.2.6",
+    "vite": "6.4.1",
+    "vitest": "^4.0.15"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}
