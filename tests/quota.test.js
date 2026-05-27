@@ -55,6 +55,21 @@ describe("quota normalization", () => {
     expect(snapshot.fiveHour.tone).toBe("safe");
   });
 
+  test("does not immediately jump to full quota during the reset settle window", () => {
+    const snapshot = normalizeRateLimits(
+      {
+        primary: { used_percent: 55, window_minutes: 300, reset_at: 1779768000 },
+      },
+      new Date("2026-05-26T04:01:00.000Z"),
+    );
+
+    expect(snapshot.fiveHour.remainingPercent).toBe(45);
+    expect(snapshot.fiveHour.usedPercent).toBe(55);
+    expect(snapshot.fiveHour.resetsAt).toBe("2026-05-26T04:00:00.000Z");
+    expect(snapshot.fiveHour.windowProgressPercent).toBe(100);
+    expect(snapshot.fiveHour.tone).toBe("watch");
+  });
+
   test("clamps invalid or out of range used percentages", () => {
     expect(remainingFromUsed(-20)).toBe(100);
     expect(remainingFromUsed(42.4)).toBe(58);

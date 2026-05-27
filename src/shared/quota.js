@@ -1,12 +1,17 @@
-export function normalizeRateLimits(rateLimits, now = new Date()) {
+const DEFAULT_RESET_SETTLE_MS = 5 * 60 * 1000;
+
+export function normalizeRateLimits(rateLimits, now = new Date(), options = {}) {
   const fiveHourLimit = findLimit(rateLimits, "primary", 300);
   const weeklyLimit = findLimit(rateLimits, "secondary", 10080);
+  const resetSettleMs = Number.isFinite(options.resetSettleMs)
+    ? Math.max(0, options.resetSettleMs)
+    : DEFAULT_RESET_SETTLE_MS;
 
   return {
     status: fiveHourLimit || weeklyLimit ? "ok" : "unknown",
     syncedAt: now.toISOString(),
-    fiveHour: normalizeLimit("5h", "5h", fiveHourLimit, now),
-    weekly: normalizeLimit("week", "week", weeklyLimit, now),
+    fiveHour: normalizeLimit("5h", "5h", fiveHourLimit, now, resetSettleMs),
+    weekly: normalizeLimit("week", "week", weeklyLimit, now, resetSettleMs),
   };
 }
 
@@ -31,10 +36,10 @@ export function combinedStatus(fiveHourRemaining, weeklyRemaining) {
   return { tone: "safe" };
 }
 
-function normalizeLimit(id, label, limit, now) {
+function normalizeLimit(id, label, limit, now, resetSettleMs) {
   const resetSeconds = limit?.resets_at ?? limit?.reset_at;
   const windowMinutes = Number.isFinite(limit?.window_minutes) ? limit.window_minutes : null;
-  const windowState = normalizeWindow(now, resetSeconds, windowMinutes);
+  const windowState = normalizeWindow(now, resetSeconds, windowMinutes, resetSettleMs);
   const rawUsedPercent = Number.isFinite(limit?.used_percent) ? clamp(Math.round(limit.used_percent), 0, 100) : null;
   const usedPercent = windowState.didRollOver ? 0 : rawUsedPercent;
   const remainingPercent = remainingFromUsed(usedPercent);
@@ -51,7 +56,7 @@ function normalizeLimit(id, label, limit, now) {
   };
 }
 
-function normalizeWindow(now, resetSeconds, windowMinutes) {
+function normalizeWindow(now, resetSeconds, windowMinutes, resetSettleMs) {
   if (!Number.isFinite(resetSeconds) || !Number.isFinite(windowMinutes) || windowMinutes <= 0) {
     return { didRollOver: false, resetsAt: null, progressPercent: null };
   }
@@ -62,6 +67,14 @@ function normalizeWindow(now, resetSeconds, windowMinutes) {
   if (!Number.isFinite(nowMs)) return { didRollOver: false, resetsAt: null, progressPercent: null };
 
   if (nowMs >= resetMs) {
+    if (nowMs - resetMs < resetSettleMs) {
+      return {
+        didRollOver: false,
+        resetsAt: new Date(resetMs).toISOString(),
+        progressPercent: 100,
+      };
+    }
+
     const cyclesElapsed = Math.floor((nowMs - resetMs) / durationMs) + 1;
     const currentStartMs = resetMs + ((cyclesElapsed - 1) * durationMs);
     const nextResetMs = resetMs + (cyclesElapsed * durationMs);
