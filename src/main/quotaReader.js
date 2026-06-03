@@ -54,6 +54,7 @@ class CodexQuotaReader {
     this.child = null;
     this.rpc = null;
     this.initializing = null;
+    this.lastGoodSnapshot = null;
   }
 
   async readFreshQuotaSnapshot({ now = new Date() } = {}) {
@@ -62,13 +63,17 @@ class CodexQuotaReader {
       const result = await rpc.request("account/rateLimits/read");
       const rateLimits = mapAppServerRateLimits(result?.rateLimits);
       if (!rateLimits.primary && !rateLimits.secondary) return createUnknownSnapshot(now);
-      return {
+      const snapshot = {
         ...normalizeRateLimits(rateLimits, now),
         source: SOURCE_CODEX_APP_SERVER,
       };
+      this.lastGoodSnapshot = snapshot;
+      return snapshot;
     } catch {
       this.resetBrokenClient();
-      return createUnknownSnapshot(now);
+      return this.lastGoodSnapshot
+        ? createStaleSnapshot(this.lastGoodSnapshot, now)
+        : createUnknownSnapshot(now);
     }
   }
 
@@ -81,12 +86,20 @@ class CodexQuotaReader {
   async start() {
     cleanupStaleAppServer(this.pidFilePath, this.processTools, this.fileTools);
     this.child = spawnCodexAppServer(this.spawnImpl, this.platform, this.codexBin);
+    const child = this.child;
     writePidFile(this.pidFilePath, this.child, this.fileTools);
-    this.rpc = createJsonRpcClient(this.child, this.timeoutMs);
+    this.rpc = createJsonRpcClient(this.child, this.timeoutMs, () => {
+      if (this.child !== child) return;
+      this.rpc = null;
+      this.child = null;
+      this.initializing = null;
+      removePidFile(this.pidFilePath, this.fileTools);
+    });
 
     try {
       await this.rpc.request("initialize", { clientInfo: CLIENT_INFO });
       this.rpc.notify("initialized", {});
+      await this.rpc.request("account/read", { refreshToken: false });
       return this.rpc;
     } catch (error) {
       this.resetBrokenClient();
@@ -232,7 +245,7 @@ function collectCodexBinaries(dir, candidates) {
   }
 }
 
-function createJsonRpcClient(child, timeoutMs) {
+function createJsonRpcClient(child, timeoutMs, onUnexpectedClose = null) {
   let nextId = 1;
   let closed = false;
   const pending = new Map();
@@ -249,6 +262,7 @@ function createJsonRpcClient(child, timeoutMs) {
   child.on?.("error", failAll);
   child.on?.("close", (code) => {
     if (!closed && pending.size > 0) failAll(new Error(`codex app-server closed with code ${code ?? "unknown"}`));
+    if (!closed) onUnexpectedClose?.(code);
   });
 
   stdout.on("line", (line) => {
@@ -345,5 +359,15 @@ export function createUnknownSnapshot(now = new Date()) {
     fiveHour: { ...emptyLimit, id: "5h", label: "5h" },
     weekly: { ...emptyLimit, id: "week", label: "week" },
     source: null,
+  };
+}
+
+function createStaleSnapshot(snapshot, now = new Date()) {
+  return {
+    ...snapshot,
+    status: "stale",
+    syncedAt: now.toISOString(),
+    fiveHour: { ...snapshot.fiveHour },
+    weekly: { ...snapshot.weekly },
   };
 }

@@ -5,6 +5,7 @@ import { createQuotaReader } from "../src/main/quotaReader.js";
 
 function createMockSpawn({ onRequest, failToSpawn = false } = {}) {
   const calls = [];
+  const requests = [];
   let nextPid = 10_000;
   const spawnImpl = (command, args) => {
     calls.push({ command, args });
@@ -32,6 +33,7 @@ function createMockSpawn({ onRequest, failToSpawn = false } = {}) {
       for (const line of lines) {
         if (!line.trim()) continue;
         const request = JSON.parse(line);
+        requests.push(request);
         const responses = onRequest?.(request) ?? [];
         for (const response of Array.isArray(responses) ? responses : [responses]) {
           child.stdout.write(`${JSON.stringify(response)}\n`);
@@ -42,16 +44,19 @@ function createMockSpawn({ onRequest, failToSpawn = false } = {}) {
     return child;
   };
 
-  return { spawnImpl, calls };
+  return { spawnImpl, calls, requests };
 }
 
 describe("quota reader", () => {
   test("reuses one Codex app-server connection across quota reads", async () => {
     let readCount = 0;
-    const { spawnImpl, calls } = createMockSpawn({
+    const { spawnImpl, calls, requests } = createMockSpawn({
       onRequest(request) {
         if (request.method === "initialize") {
           return { id: request.id, result: { serverInfo: { name: "codex" } } };
+        }
+        if (request.method === "account/read") {
+          return { id: request.id, result: { account: { type: "chatgpt", planType: "plus" } } };
         }
         if (request.method === "account/rateLimits/read") {
           readCount += 1;
@@ -80,6 +85,13 @@ describe("quota reader", () => {
     reader.close();
 
     expect(calls).toEqual([{ command: "codex", args: ["app-server"] }]);
+    expect(requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "initialized",
+      "account/read",
+      "account/rateLimits/read",
+      "account/rateLimits/read",
+    ]);
     expect(first.status).toBe("ok");
     expect(first.fiveHour.remainingPercent).toBe(92);
     expect(first.fiveHour.windowMinutes).toBe(300);
@@ -92,6 +104,7 @@ describe("quota reader", () => {
     const { spawnImpl, calls } = createMockSpawn({
       onRequest(request) {
         if (request.method === "initialize") return { id: request.id, result: {} };
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
         if (request.method === "account/rateLimits/read") {
           return { id: request.id, result: { rateLimits: { primary: { usedPercent: 20, windowDurationMins: 300 } } } };
         }
@@ -126,6 +139,7 @@ describe("quota reader", () => {
             { id: request.id, result: {} },
           ];
         }
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
         if (request.method === "account/rateLimits/read") {
           return [
             { method: "remoteControl/status/changed", params: {} },
@@ -159,6 +173,42 @@ describe("quota reader", () => {
     expect(snapshot.source).toBe(null);
   });
 
+  test("keeps the last valid quota snapshot when a later app-server read fails", async () => {
+    let failNextRead = false;
+    const { spawnImpl } = createMockSpawn({
+      onRequest(request) {
+        if (request.method === "initialize") return { id: request.id, result: {} };
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
+        if (request.method === "account/rateLimits/read") {
+          if (failNextRead) return { id: request.id, error: { message: "temporary failure" } };
+          return {
+            id: request.id,
+            result: {
+              rateLimits: {
+                primary: { usedPercent: 42, windowDurationMins: 300 },
+                secondary: { usedPercent: 37, windowDurationMins: 10080 },
+              },
+            },
+          };
+        }
+        return [];
+      },
+    });
+    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null });
+
+    const first = await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:30:00.000Z") });
+    failNextRead = true;
+    const second = await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:31:00.000Z") });
+    reader.close();
+
+    expect(first.status).toBe("ok");
+    expect(first.fiveHour.remainingPercent).toBe(58);
+    expect(second.status).toBe("stale");
+    expect(second.fiveHour.remainingPercent).toBe(58);
+    expect(second.weekly.remainingPercent).toBe(63);
+    expect(second.source).toBe("codex-app-server");
+  });
+
   test("cleans up a marked stale app-server before starting a new one", async () => {
     const killed = [];
     const processTools = {
@@ -168,6 +218,7 @@ describe("quota reader", () => {
     const { spawnImpl } = createMockSpawn({
       onRequest(request) {
         if (request.method === "initialize") return { id: request.id, result: {} };
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
         if (request.method === "account/rateLimits/read") {
           return { id: request.id, result: { rateLimits: { primary: { usedPercent: 25, windowDurationMins: 300 } } } };
         }
@@ -190,6 +241,37 @@ describe("quota reader", () => {
 
     expect(killed).toEqual([12345]);
     expect(snapshot.fiveHour.remainingPercent).toBe(75);
+  });
+
+  test("cleans up the marker when the app-server exits unexpectedly", async () => {
+    let spawnedChild;
+    const { spawnImpl } = createMockSpawn({
+      onRequest(request) {
+        if (request.method === "initialize") return { id: request.id, result: {} };
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
+        if (request.method === "account/rateLimits/read") {
+          return { id: request.id, result: { rateLimits: { primary: { usedPercent: 35, windowDurationMins: 300 } } } };
+        }
+        return [];
+      },
+    });
+    const wrappedSpawn = (...args) => {
+      spawnedChild = spawnImpl(...args);
+      return spawnedChild;
+    };
+    const pidFiles = new Map();
+    const reader = createQuotaReader({
+      spawnImpl: wrappedSpawn,
+      platform: "linux",
+      pidFilePath: "marker.json",
+      fileTools: createMemoryFileTools(pidFiles),
+    });
+
+    await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:30:00.000Z") });
+    expect(pidFiles.has("marker.json")).toBe(true);
+    spawnedChild.emit("close", 0);
+
+    expect(pidFiles.has("marker.json")).toBe(false);
   });
 });
 
