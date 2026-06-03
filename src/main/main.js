@@ -10,7 +10,7 @@ import {
   readCodexGlobalState,
 } from "./codexState.js";
 import { nextQuotaPollingState } from "./quotaPolling.js";
-import { createUnknownSnapshot, readFreshQuotaSnapshot } from "./quotaReader.js";
+import { closeQuotaAppServer, createUnknownSnapshot, readFreshQuotaSnapshot } from "./quotaReader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -114,6 +114,7 @@ function startPositionLoop() {
     if (refreshTimer) clearInterval(refreshTimer);
     if (sessionDebounce) clearTimeout(sessionDebounce);
     sessionWatcher?.close();
+    closeQuotaAppServer();
   });
 }
 
