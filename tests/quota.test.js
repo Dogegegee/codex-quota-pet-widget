@@ -40,7 +40,21 @@ describe("quota normalization", () => {
     expect(snapshot.fiveHour.windowProgressPercent).toBe(null);
   });
 
-  test("estimates quota as refreshed after the reset time passes without a newer event", () => {
+  test("does not treat a limit without a window duration as five hour quota", () => {
+    const snapshot = normalizeRateLimits(
+      {
+        primary: { used_percent: 0, window_minutes: null, reset_at: 1780466070 },
+        secondary: null,
+      },
+      new Date("2026-06-03T05:50:00.000Z"),
+    );
+
+    expect(snapshot.status).toBe("unknown");
+    expect(snapshot.fiveHour.remainingPercent).toBe(null);
+    expect(snapshot.weekly.remainingPercent).toBe(null);
+  });
+
+  test("does not estimate quota as refreshed after the reset time passes", () => {
     const snapshot = normalizeRateLimits(
       {
         primary: { used_percent: 100, window_minutes: 300, reset_at: 1779768000 },
@@ -48,11 +62,11 @@ describe("quota normalization", () => {
       new Date("2026-05-26T04:15:00.000Z"),
     );
 
-    expect(snapshot.fiveHour.remainingPercent).toBe(99);
-    expect(snapshot.fiveHour.usedPercent).toBe(0);
+    expect(snapshot.fiveHour.remainingPercent).toBe(0);
+    expect(snapshot.fiveHour.usedPercent).toBe(100);
     expect(snapshot.fiveHour.resetsAt).toBe("2026-05-26T09:00:00.000Z");
     expect(snapshot.fiveHour.windowProgressPercent).toBe(5);
-    expect(snapshot.fiveHour.tone).toBe("safe");
+    expect(snapshot.fiveHour.tone).toBe("low");
   });
 
   test("does not immediately jump to full quota during the reset settle window", () => {

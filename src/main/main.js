@@ -9,7 +9,7 @@ import {
   getCodexGlobalStatePath,
   readCodexGlobalState,
 } from "./codexState.js";
-import { nextQuotaPollingState } from "./quotaPolling.js";
+import { nextQuotaPollingState, shouldRefreshQuota } from "./quotaPolling.js";
 import { closeQuotaAppServer, createUnknownSnapshot, readFreshQuotaSnapshot } from "./quotaReader.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -147,13 +147,19 @@ function getQuotaState() {
 }
 
 async function refreshQuota({ trigger = "timer" } = {}) {
-  if (quotaPollingState.paused && trigger !== "session") return latestState;
+  const wasPaused = quotaPollingState.paused;
+  const shouldRefresh = shouldRefreshQuota({
+    pollingState: quotaPollingState,
+    latestState,
+    trigger,
+  });
+  if (!shouldRefresh) return latestState;
   if (quotaRefreshInFlight) return latestState;
   quotaRefreshInFlight = true;
   try {
     latestState = await readFreshQuotaSnapshot();
     quotaPollingState = nextQuotaPollingState(quotaPollingState, latestState, {
-      resetUnchanged: trigger === "session",
+      resetUnchanged: trigger === "session" || (wasPaused && shouldRefresh),
     });
     logQuotaChange(latestState);
     broadcastState(latestState);

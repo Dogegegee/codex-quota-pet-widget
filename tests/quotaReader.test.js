@@ -74,7 +74,7 @@ describe("quota reader", () => {
         return [];
       },
     });
-    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null });
+    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null, cacheFilePath: null });
 
     const first = await reader.readFreshQuotaSnapshot({
       now: new Date("2026-06-03T02:30:00.000Z"),
@@ -116,6 +116,7 @@ describe("quota reader", () => {
       platform: "win32",
       codexBin: "C:\\Users\\test\\AppData\\Local\\OpenAI\\Codex\\bin\\abc\\codex.exe",
       pidFilePath: null,
+      cacheFilePath: null,
     });
 
     await reader.readFreshQuotaSnapshot({
@@ -149,7 +150,7 @@ describe("quota reader", () => {
         return [];
       },
     });
-    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null });
+    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null, cacheFilePath: null });
 
     const snapshot = await reader.readFreshQuotaSnapshot({
       now: new Date("2026-06-03T02:30:00.000Z"),
@@ -161,7 +162,13 @@ describe("quota reader", () => {
 
   test("does not fall back to local logs when app-server cannot return quota", async () => {
     const { spawnImpl } = createMockSpawn({ failToSpawn: true });
-    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null, timeoutMs: 20 });
+    const reader = createQuotaReader({
+      spawnImpl,
+      platform: "linux",
+      pidFilePath: null,
+      cacheFilePath: null,
+      timeoutMs: 20,
+    });
 
     const snapshot = await reader.readFreshQuotaSnapshot({
       now: new Date("2026-06-03T02:30:00.000Z"),
@@ -194,7 +201,7 @@ describe("quota reader", () => {
         return [];
       },
     });
-    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null });
+    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null, cacheFilePath: null });
 
     const first = await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:30:00.000Z") });
     failNextRead = true;
@@ -207,6 +214,113 @@ describe("quota reader", () => {
     expect(second.fiveHour.remainingPercent).toBe(58);
     expect(second.weekly.remainingPercent).toBe(63);
     expect(second.source).toBe("codex-app-server");
+  });
+
+  test("keeps the last valid quota snapshot when app-server returns incomplete limits", async () => {
+    let returnIncompleteLimits = false;
+    const { spawnImpl } = createMockSpawn({
+      onRequest(request) {
+        if (request.method === "initialize") return { id: request.id, result: {} };
+        if (request.method === "account/read") return { id: request.id, result: { account: { type: "chatgpt" } } };
+        if (request.method === "account/rateLimits/read") {
+          if (returnIncompleteLimits) {
+            return {
+              id: request.id,
+              result: {
+                rateLimits: {
+                  primary: { usedPercent: 0, windowDurationMins: null },
+                  secondary: null,
+                },
+              },
+            };
+          }
+          return {
+            id: request.id,
+            result: {
+              rateLimits: {
+                primary: { usedPercent: 80, windowDurationMins: 300 },
+                secondary: { usedPercent: 42, windowDurationMins: 10080 },
+              },
+            },
+          };
+        }
+        return [];
+      },
+    });
+    const reader = createQuotaReader({ spawnImpl, platform: "linux", pidFilePath: null, cacheFilePath: null });
+
+    const first = await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:30:00.000Z") });
+    returnIncompleteLimits = true;
+    const second = await reader.readFreshQuotaSnapshot({ now: new Date("2026-06-03T02:31:00.000Z") });
+    reader.close();
+
+    expect(first.status).toBe("ok");
+    expect(first.fiveHour.remainingPercent).toBe(20);
+    expect(second.status).toBe("stale");
+    expect(second.fiveHour.remainingPercent).toBe(20);
+    expect(second.weekly.remainingPercent).toBe(58);
+  });
+
+  test("uses a recent cached valid quota when the first app-server read fails", async () => {
+    const cache = {
+      status: "ok",
+      syncedAt: "2026-06-03T02:29:00.000Z",
+      source: "codex-app-server",
+      fiveHour: { id: "5h", label: "5h", remainingPercent: 18, usedPercent: 82, windowMinutes: 300 },
+      weekly: { id: "week", label: "week", remainingPercent: 57, usedPercent: 43, windowMinutes: 10080 },
+    };
+    const files = new Map([
+      ["quota-cache.json", JSON.stringify(cache)],
+    ]);
+    const { spawnImpl } = createMockSpawn({ failToSpawn: true });
+    const reader = createQuotaReader({
+      spawnImpl,
+      platform: "linux",
+      pidFilePath: null,
+      cacheFilePath: "quota-cache.json",
+      fileTools: createMemoryFileTools(files),
+      timeoutMs: 20,
+    });
+
+    const snapshot = await reader.readFreshQuotaSnapshot({
+      now: new Date("2026-06-03T02:30:00.000Z"),
+    });
+    reader.close();
+
+    expect(snapshot.status).toBe("stale");
+    expect(snapshot.fiveHour.remainingPercent).toBe(18);
+    expect(snapshot.weekly.remainingPercent).toBe(57);
+  });
+
+  test("reads cached quota files with a UTF-8 BOM", async () => {
+    const cache = {
+      status: "ok",
+      syncedAt: "2026-06-03T02:29:00.000Z",
+      source: "codex-app-server",
+      fiveHour: { id: "5h", label: "5h", remainingPercent: 16, usedPercent: 84, windowMinutes: 300 },
+      weekly: { id: "week", label: "week", remainingPercent: 57, usedPercent: 43, windowMinutes: 10080 },
+    };
+    const files = new Map([
+      ["quota-cache.json", `\uFEFF${JSON.stringify(cache)}`],
+    ]);
+    const { spawnImpl } = createMockSpawn({ failToSpawn: true });
+    const reader = createQuotaReader({
+      spawnImpl,
+      platform: "linux",
+      pidFilePath: null,
+      cacheFilePath: "quota-cache.json",
+      fileTools: createMemoryFileTools(files),
+      timeoutMs: 20,
+    });
+
+    const snapshot = await reader.readFreshQuotaSnapshot({
+      now: new Date("2026-06-03T02:30:00.000Z"),
+    });
+    reader.close();
+
+    expect(snapshot.status).toBe("stale");
+    expect(snapshot.fiveHour.remainingPercent).toBe(16);
+    expect(snapshot.weekly.remainingPercent).toBe(57);
   });
 
   test("cleans up a marked stale app-server before starting a new one", async () => {
@@ -232,6 +346,7 @@ describe("quota reader", () => {
       spawnImpl,
       platform: "linux",
       pidFilePath: "marker.json",
+      cacheFilePath: null,
       processTools,
       fileTools: createMemoryFileTools(pidFiles),
     });
@@ -264,6 +379,7 @@ describe("quota reader", () => {
       spawnImpl: wrappedSpawn,
       platform: "linux",
       pidFilePath: "marker.json",
+      cacheFilePath: null,
       fileTools: createMemoryFileTools(pidFiles),
     });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { nextQuotaPollingState } from "../src/main/quotaPolling.js";
+import { nextQuotaPollingState, shouldRefreshQuota } from "../src/main/quotaPolling.js";
 
 describe("quota polling policy", () => {
   test("pauses polling after five unchanged quota snapshots", () => {
@@ -54,5 +54,33 @@ describe("quota polling policy", () => {
     expect(state.paused).toBe(false);
     expect(state.unchangedCount).toBe(1);
     expect(state.signature).toBe("54/32");
+  });
+
+  test("timer polling stays asleep before the five hour reset time", () => {
+    const shouldRefresh = shouldRefreshQuota({
+      pollingState: { paused: true, unchangedCount: 5, signature: "54/32" },
+      latestState: {
+        fiveHour: { remainingPercent: 54, resetsAt: "2026-06-03T08:00:00.000Z" },
+        weekly: { remainingPercent: 32 },
+      },
+      trigger: "timer",
+      now: new Date("2026-06-03T07:59:00.000Z"),
+    });
+
+    expect(shouldRefresh).toBe(false);
+  });
+
+  test("timer polling wakes after the five hour reset time", () => {
+    const shouldRefresh = shouldRefreshQuota({
+      pollingState: { paused: true, unchangedCount: 5, signature: "54/32" },
+      latestState: {
+        fiveHour: { remainingPercent: 54, resetsAt: "2026-06-03T08:00:00.000Z" },
+        weekly: { remainingPercent: 32 },
+      },
+      trigger: "timer",
+      now: new Date("2026-06-03T08:00:01.000Z"),
+    });
+
+    expect(shouldRefresh).toBe(true);
   });
 });

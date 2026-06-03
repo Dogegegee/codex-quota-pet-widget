@@ -41,7 +41,7 @@ function normalizeLimit(id, label, limit, now, resetSettleMs) {
   const windowMinutes = Number.isFinite(limit?.window_minutes) ? limit.window_minutes : null;
   const windowState = normalizeWindow(now, resetSeconds, windowMinutes, resetSettleMs);
   const rawUsedPercent = Number.isFinite(limit?.used_percent) ? clamp(Math.round(limit.used_percent), 0, 100) : null;
-  const usedPercent = windowState.didRollOver ? 0 : rawUsedPercent;
+  const usedPercent = rawUsedPercent;
   const remainingPercent = remainingFromUsed(usedPercent);
 
   return {
@@ -96,8 +96,12 @@ function normalizeWindow(now, resetSeconds, windowMinutes, resetSettleMs) {
 function findLimit(rateLimits, preferredKey, windowMinutes) {
   if (!rateLimits || typeof rateLimits !== "object") return null;
   const preferred = rateLimits[preferredKey];
-  if (preferred && typeof preferred === "object") return preferred;
+  if (isWindowLimit(preferred, windowMinutes)) return preferred;
   return Object.values(rateLimits).find((value) => value?.window_minutes === windowMinutes) ?? null;
+}
+
+function isWindowLimit(limit, windowMinutes) {
+  return limit && typeof limit === "object" && limit.window_minutes === windowMinutes;
 }
 
 function clamp(value, min, max) {

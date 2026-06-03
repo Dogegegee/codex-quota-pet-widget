@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { normalizeRateLimits } from "../shared/quota.js";
 
 const DEFAULT_TIMEOUT_MS = 18_000;
+const DEFAULT_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 const SOURCE_CODEX_APP_SERVER = "codex-app-server";
 const SERVER_MARKER = "codex-quota-pet-widget-app-server";
 const CLIENT_INFO = {
@@ -41,6 +42,8 @@ class CodexQuotaReader {
     codexBin = null,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     pidFilePath = defaultPidFilePath(),
+    cacheFilePath = defaultCacheFilePath(),
+    cacheMaxAgeMs = DEFAULT_CACHE_MAX_AGE_MS,
     processTools = defaultProcessTools,
     fileTools = fs,
   } = {}) {
@@ -49,12 +52,14 @@ class CodexQuotaReader {
     this.codexBin = codexBin;
     this.timeoutMs = timeoutMs;
     this.pidFilePath = pidFilePath;
+    this.cacheFilePath = cacheFilePath;
+    this.cacheMaxAgeMs = cacheMaxAgeMs;
     this.processTools = processTools;
     this.fileTools = fileTools;
     this.child = null;
     this.rpc = null;
     this.initializing = null;
-    this.lastGoodSnapshot = null;
+    this.lastGoodSnapshot = readCachedSnapshot(cacheFilePath, fileTools);
   }
 
   async readFreshQuotaSnapshot({ now = new Date() } = {}) {
@@ -62,19 +67,25 @@ class CodexQuotaReader {
       const rpc = await this.getRpc();
       const result = await rpc.request("account/rateLimits/read");
       const rateLimits = mapAppServerRateLimits(result?.rateLimits);
-      if (!rateLimits.primary && !rateLimits.secondary) return createUnknownSnapshot(now);
+      if (!rateLimits.primary && !rateLimits.secondary) return this.lastKnownOrUnknown(now);
       const snapshot = {
         ...normalizeRateLimits(rateLimits, now),
         source: SOURCE_CODEX_APP_SERVER,
       };
+      if (!hasUsableQuota(snapshot)) return this.lastKnownOrUnknown(now);
       this.lastGoodSnapshot = snapshot;
+      writeCachedSnapshot(this.cacheFilePath, snapshot, this.fileTools);
       return snapshot;
     } catch {
       this.resetBrokenClient();
-      return this.lastGoodSnapshot
-        ? createStaleSnapshot(this.lastGoodSnapshot, now)
-        : createUnknownSnapshot(now);
+      return this.lastKnownOrUnknown(now);
     }
+  }
+
+  lastKnownOrUnknown(now) {
+    return isRecentSnapshot(this.lastGoodSnapshot, now, this.cacheMaxAgeMs)
+      ? createStaleSnapshot(this.lastGoodSnapshot, now)
+      : createUnknownSnapshot(now);
   }
 
   async getRpc() {
@@ -129,6 +140,10 @@ function defaultPidFilePath() {
   return path.join(getCodexHome(), "quota-pet-widget", "app-server.json");
 }
 
+function defaultCacheFilePath() {
+  return path.join(getCodexHome(), "quota-pet-widget", "last-good-quota.json");
+}
+
 function cleanupStaleAppServer(pidFilePath, processTools, fileTools) {
   const marker = readPidFile(pidFilePath, fileTools);
   if (marker?.marker !== SERVER_MARKER || !Number.isInteger(marker.pid)) return;
@@ -177,6 +192,30 @@ function removePidFile(pidFilePath, fileTools) {
     fileTools.rmSync(pidFilePath, { force: true });
   } catch {
     // Ignore cleanup errors.
+  }
+}
+
+function readCachedSnapshot(cacheFilePath, fileTools) {
+  if (!cacheFilePath) return null;
+  try {
+    const snapshot = JSON.parse(stripJsonBom(fileTools.readFileSync(cacheFilePath, "utf8")));
+    return hasUsableQuota(snapshot) ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+function stripJsonBom(value) {
+  return typeof value === "string" && value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value;
+}
+
+function writeCachedSnapshot(cacheFilePath, snapshot, fileTools) {
+  if (!cacheFilePath || !hasUsableQuota(snapshot)) return;
+  try {
+    fileTools.mkdirSync(path.dirname(cacheFilePath), { recursive: true });
+    fileTools.writeFileSync(cacheFilePath, JSON.stringify(snapshot, null, 2), "utf8");
+  } catch {
+    // Cache writes are best-effort; live reads remain authoritative.
   }
 }
 
@@ -370,4 +409,17 @@ function createStaleSnapshot(snapshot, now = new Date()) {
     fiveHour: { ...snapshot.fiveHour },
     weekly: { ...snapshot.weekly },
   };
+}
+
+function hasUsableQuota(snapshot) {
+  return Number.isFinite(snapshot?.fiveHour?.remainingPercent)
+    || Number.isFinite(snapshot?.weekly?.remainingPercent);
+}
+
+function isRecentSnapshot(snapshot, now, maxAgeMs) {
+  if (!hasUsableQuota(snapshot)) return false;
+  const syncedAtMs = new Date(snapshot.syncedAt).getTime();
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(syncedAtMs) || !Number.isFinite(nowMs)) return false;
+  return nowMs - syncedAtMs <= maxAgeMs;
 }
