@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { normalizeRateLimits, remainingFromUsed, toneForRemaining } from "../src/shared/quota.js";
+import { normalizeRateLimits, remainingFromUsed, toneForRemaining, windowProgressFromReset } from "../src/shared/quota.js";
 
 describe("quota normalization", () => {
   test("maps Codex primary and secondary rate limits into five hour and weekly quota", () => {
@@ -29,6 +29,26 @@ describe("quota normalization", () => {
 
     expect(snapshot.fiveHour.windowProgressPercent).toBe(50);
     expect(snapshot.weekly.windowProgressPercent).toBeGreaterThan(0);
+  });
+
+  test("calculates live window progress near the reset time", () => {
+    const progress = windowProgressFromReset({
+      resetsAt: "2026-06-12T06:12:36.000Z",
+      windowMinutes: 300,
+      now: new Date("2026-06-12T06:11:36.000Z"),
+    });
+
+    expect(progress).toBe(100);
+  });
+
+  test("wraps live window progress back to the next cycle after reset", () => {
+    const progress = windowProgressFromReset({
+      resetsAt: "2026-06-12T06:12:36.000Z",
+      windowMinutes: 300,
+      now: new Date("2026-06-12T06:12:36.000Z"),
+    });
+
+    expect(progress).toBe(0);
   });
 
   test("leaves quota window progress unknown without reset time or window length", () => {

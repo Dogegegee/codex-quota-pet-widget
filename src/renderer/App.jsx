@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { combinedStatus } from "../shared/quota.js";
+import { combinedStatus, windowProgressFromReset } from "../shared/quota.js";
 import "./styles.css";
 
 const PERIOD_RING_PATH =
@@ -22,6 +22,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 function App() {
   const [state, setState] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     let mounted = true;
@@ -39,6 +40,11 @@ function App() {
       unsubscribe?.();
       window.clearInterval(timer);
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const displayState =
@@ -61,16 +67,25 @@ function App() {
       tabIndex={-1}
     >
       <div className="bars" aria-label="Codex quota">
-        <QuotaBar quota={displayState.fiveHour} shortLabel="5H" kind="five" />
-        <QuotaBar quota={displayState.weekly} shortLabel={WEEK_LABEL} kind="week" />
+        <QuotaBar quota={displayState.fiveHour} shortLabel="5H" kind="five" now={now} />
+        <QuotaBar quota={displayState.weekly} shortLabel={WEEK_LABEL} kind="week" now={now} />
       </div>
     </button>
   );
 }
 
-function QuotaBar({ quota, shortLabel, kind }) {
+function QuotaBar({ quota, shortLabel, kind, now }) {
   const value = Number.isFinite(quota.remainingPercent) ? quota.remainingPercent : 0;
-  const period = Number.isFinite(quota.windowProgressPercent) ? quota.windowProgressPercent : 0;
+  const livePeriod = windowProgressFromReset({
+    resetsAt: quota.resetsAt,
+    windowMinutes: quota.windowMinutes,
+    now: new Date(now),
+  });
+  const period = Number.isFinite(livePeriod)
+    ? livePeriod
+    : Number.isFinite(quota.windowProgressPercent)
+      ? quota.windowProgressPercent
+      : 0;
   const text = Number.isFinite(quota.remainingPercent) ? String(quota.remainingPercent) : "--";
   const periodPath = progressPathForPeriod(period);
 

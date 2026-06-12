@@ -36,6 +36,22 @@ export function combinedStatus(fiveHourRemaining, weeklyRemaining) {
   return { tone: "safe" };
 }
 
+export function windowProgressFromReset({ resetsAt, windowMinutes, now = new Date() } = {}) {
+  const resetMs = new Date(resetsAt).getTime();
+  const durationMs = Number.isFinite(windowMinutes) ? windowMinutes * 60 * 1000 : null;
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  if (!Number.isFinite(resetMs) || !Number.isFinite(durationMs) || durationMs <= 0 || !Number.isFinite(nowMs)) {
+    return null;
+  }
+
+  if (nowMs < resetMs) {
+    return clamp(Math.round(((nowMs - (resetMs - durationMs)) / durationMs) * 100), 0, 100);
+  }
+
+  const elapsedSinceReset = nowMs - resetMs;
+  return clamp(Math.round(((elapsedSinceReset % durationMs) / durationMs) * 100), 0, 100);
+}
+
 function normalizeLimit(id, label, limit, now, resetSettleMs) {
   const resetSeconds = limit?.resets_at ?? limit?.reset_at;
   const windowMinutes = Number.isFinite(limit?.window_minutes) ? limit.window_minutes : null;
@@ -76,20 +92,26 @@ function normalizeWindow(now, resetSeconds, windowMinutes, resetSettleMs) {
     }
 
     const cyclesElapsed = Math.floor((nowMs - resetMs) / durationMs) + 1;
-    const currentStartMs = resetMs + ((cyclesElapsed - 1) * durationMs);
     const nextResetMs = resetMs + (cyclesElapsed * durationMs);
     return {
       didRollOver: true,
       resetsAt: new Date(nextResetMs).toISOString(),
-      progressPercent: clamp(Math.round(((nowMs - currentStartMs) / durationMs) * 100), 0, 100),
+      progressPercent: windowProgressFromReset({
+        resetsAt: new Date(nextResetMs).toISOString(),
+        windowMinutes,
+        now,
+      }),
     };
   }
 
-  const startMs = resetMs - durationMs;
   return {
     didRollOver: false,
     resetsAt: new Date(resetMs).toISOString(),
-    progressPercent: clamp(Math.round(((nowMs - startMs) / durationMs) * 100), 0, 100),
+    progressPercent: windowProgressFromReset({
+      resetsAt: new Date(resetMs).toISOString(),
+      windowMinutes,
+      now,
+    }),
   };
 }
 
